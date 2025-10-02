@@ -137,12 +137,12 @@
             </label>
             <label>Custom Token: <input type="text" id="customToken" placeholder="0x..."></label>
         </div>
-        <button onclick="startBot()">Start Bot</button>
-        <button onclick="stopBot()">Stop Bot</button>
-        <button onclick="checkBalances()">Check Balances</button>
-        <div class="balance-row"><span>GT Balance</span><span id="gtBalance">Balance: 0</span></div>
-        <div class="balance-row"><span>Token Balance</span><span id="tokenBalance">Balance: 0</span></div>
-        <div id="status">Status: Ready</div>
+        <button onclick="startBot()">启动机器人</button>
+        <button onclick="stopBot()">停止机器人</button>
+        <button onclick="checkBalances()">检查余额</button>
+        <div class="balance-row"><span>GT 余额</span><span id="gtBalance">余额: 0</span></div>
+        <div class="balance-row"><span>代币余额</span><span id="tokenBalance">余额: 0</span></div>
+        <div id="status">状态: 就绪</div>
         <div id="log"></div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/web3@1.7.4/dist/web3.min.js"></script>
@@ -254,20 +254,22 @@ function log(message) {
 async function initializeWeb3() {
     const rpcUrls = [
         document.getElementById("rpcUrl").value.trim(),
-        "https://gatelayer-rpc.gatenode.cc"
+        "https://gatelayer-rpc.gatenode.cc",
+        "https://rpc.gatelayer.org"
     ];
     for (const rpcUrl of rpcUrls) {
         if (!rpcUrl) {
-            log(`Error: No RPC URL provided for ${rpcUrl}`);
+            log(`错误: 未提供 RPC URL ${rpcUrl}`);
             continue;
         }
         try {
             const provider = new Web3.providers.HttpProvider(rpcUrl, { timeout: 30000 });
             web3Instance = new Web3(provider);
+            log(`正在测试 RPC 连接: ${rpcUrl}...`);
             const chainId = await web3Instance.eth.getChainId();
-            log(`Connected to RPC ${rpcUrl}, Chain ID: ${chainId}`);
+            log(`已连接到 RPC ${rpcUrl}, 链 ID: ${chainId}`);
             if (chainId !== 10088) {
-                log(`Warning: Expected Chain ID 10088, got ${chainId}. Continuing...`);
+                log(`警告: 预期链 ID 10088，实际为 ${chainId}，继续运行...`);
             }
             document.getElementById("status").textContent = `状态: 已连接到 ${rpcUrl}\n`;
             return web3Instance;
@@ -275,8 +277,8 @@ async function initializeWeb3() {
             log(`无法连接到 ${rpcUrl}: ${error.message}`);
         }
     }
-    log("错误: 所有 RPC 连接失败");
-    document.getElementById("status").textContent = "状态: 所有 RPC 连接失败\n";
+    log("错误: 所有 RPC 连接失败，请检查网络或尝试其他 RPC URL");
+    document.getElementById("status").textContent = "状态: 所有 RPC 连接失败，请检查网络或尝试其他 RPC URL\n";
     return null;
 }
 
@@ -334,9 +336,13 @@ async function checkBalances() {
     const status = document.getElementById("status");
     status.textContent = "状态: 正在检查余额...\n";
     if (!web3Instance) {
-        log("错误: Web3 未初始化");
-        status.textContent += "错误: Web3 未初始化\n";
-        return;
+        const web3 = await initializeWeb3();
+        if (!web3) {
+            log("错误: Web3 未初始化");
+            status.textContent += "错误: Web3 未初始化\n";
+            return;
+        }
+        web3Instance = web3;
     }
     if (wallets.length === 0) {
         log("错误: 未提供钱包");
@@ -520,20 +526,21 @@ async function startBot() {
     }
     const keys = privateKeysInput.split('\n').map(key => key.trim()).filter(key => key);
     log(`处理 ${keys.length} 个私钥: ${keys.map(k => k.slice(0, 10) + '...').join(', ')}`);
-    wallets = keys.map((key, index) => {
-        if (!key.startsWith('0x') || key.length !== 66 || !/^[0-9a-fA-F]{64}$/.test(key.slice(2))) {
+    wallets = [];
+    for (let index = 0; index < keys.length; index++) {
+        const key = keys[index];
+        if (!key.startsWith('0x') || key.length !== 66 || !Web3.utils.isHexStrict(key.slice(2))) {
             log(`无效私钥（第 ${index + 1} 行）: ${key.slice(0, 10)}... (需以 0x 开头，66 位，仅限十六进制字符)`);
-            return null;
+            continue;
         }
         try {
-            const address = Web3.utils.privateToAddress(key);
-            log(`有效私钥（第 ${index + 1} 行）: 地址 ${address.slice(0, 6)}...${address.slice(-4)}`);
-            return { address, privateKey: key };
+            const account = web3Instance ? web3Instance.eth.accounts.privateKeyToAccount(key) : { address: Web3.utils.privateToAddress(key) };
+            log(`有效私钥（第 ${index + 1} 行）: 地址 ${account.address.slice(0, 6)}...${account.address.slice(-4)}`);
+            wallets.push({ address: account.address, privateKey: key });
         } catch (error) {
             log(`无效私钥（第 ${index + 1} 行）: ${error.message}`);
-            return null;
         }
-    }).filter(wallet => wallet);
+    }
     if (wallets.length === 0) {
         log("错误: 未提供有效私钥");
         document.getElementById("status").textContent = "状态: 未提供有效私钥\n";
@@ -541,8 +548,10 @@ async function startBot() {
     }
     log(`加载 ${wallets.length} 个有效钱包`);
     document.getElementById("status").textContent = `状态: 加载 ${wallets.length} 个有效钱包\n`;
-    web3Instance = await initializeWeb3();
-    if (!web3Instance) return;
+    if (!web3Instance) {
+        web3Instance = await initializeWeb3();
+        if (!web3Instance) return;
+    }
     botRunning = true;
     currentWalletIndex = 0;
     autoBuyInterval = setInterval(async () => {
