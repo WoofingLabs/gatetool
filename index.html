@@ -116,6 +116,7 @@
         <div class="header">GateSwap & WoofSwap Bot</div>
         <div class="settings">
             <label>RPC URL: <input type="text" id="rpcUrl" value="https://gatelayer-mainnet.gatenode.cc"></label>
+            <label>Chain ID: <input type="text" id="chainId" value="10088" readonly></label>
             <label>Gas Price (Gwei): <input type="number" id="gasPrice" value="0.5" step="0.1" min="0"></label>
             <label>Slippage (%): <input type="number" id="slippage" value="0.5" step="0.1" min="0"></label>
             <label>Min Buy (GT): <input type="number" id="minAmount" value="0.00001" step="0.000001" min="0"></label>
@@ -147,444 +148,470 @@
     </div>
     <script src="https://cdn.jsdelivr.net/npm/web3@1.7.4/dist/web3.min.js"></script>
     <script>
-const WOOF_ROUTER_ADDRESS = "0x5c005d074E25b89db97A32087C06D154D8CB2D5b";
-const GATE_ROUTER_ADDRESS = "0x12814690f59a9ce8ba87dc8cf0692442baa9c097";
-const WGT_ADDRESS = "0x6803b8e93b13941f6b73b82e324b80251b3de338";
-const TOKEN_ADDRESSES = {
-    "GDOG": "0xa037355662d34d9b57de209e22544a4862f5a30c",
-    "GCAT": "0x448b6637bc794366D95D26F2EC5D076d5f1293DC",
-    "LUCKY": "0x8e0474a49163f1764d56a9fd9342b87f1d1aec00"
-};
+        const WOOF_ROUTER_ADDRESS = "0x5c005d074E25b89db97A32087C06D154D8CB2D5b";
+        const GATE_ROUTER_ADDRESS = "0x12814690f59a9ce8ba87dc8cf0692442baa9c097";
+        const WGT_ADDRESS = "0x6803b8e93b13941f6b73b82e324b80251b3de338";
+        const TOKEN_ADDRESSES = {
+            "GDOG": "0xa037355662d34d9b57de209e22544a4862f5a30c",
+            "GCAT": "0x448b6637bc794366D95D26F2EC5D076d5f1293DC",
+            "LUCKY": "0x8e0474a49163f1764d56a9fd9342b87f1d1aec00"
+        };
 
-const WOOF_ROUTER_ABI = [
-    {
-        "inputs": [
-            { "internalType": "uint256", "name": "amountOutMin", "type": "uint256" },
-            { "components": [
-                { "internalType": "address", "name": "from", "type": "address" },
-                { "internalType": "address", "name": "to", "type": "address" },
-                { "internalType": "bool", "name": "stable", "type": "bool" }
-            ], "internalType": "struct Router.route[]", "name": "routes", "type": "tuple[]" },
-            { "internalType": "address", "name": "to", "type": "address" },
-            { "internalType": "uint256", "name": "deadline", "type": "uint256" }
-        ],
-        "name": "swapExactETHForTokens",
-        "outputs": [{ "internalType": "uint256[]", "name": "amounts", "type": "uint256[]" }],
-        "stateMutability": "payable",
-        "type": "function"
-    }
-];
-
-const GATE_ROUTER_ABI = [
-    {
-        "inputs": [
-            { "internalType": "uint256", "name": "amountOutMin", "type": "uint256" },
-            { "internalType": "address[]", "name": "path", "type": "address[]" },
-            { "internalType": "address", "name": "to", "type": "address" },
-            { "internalType": "uint256", "name": "deadline", "type": "uint256" }
-        ],
-        "name": "swapExactETHForTokens",
-        "outputs": [{ "internalType": "uint256[]", "name": "amounts", "type": "uint256[]" }],
-        "stateMutability": "payable",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            { "internalType": "uint256", "name": "amountIn", "type": "uint256" },
-            { "internalType": "address[]", "name": "path", "type": "address[]" }
-        ],
-        "name": "getAmountsOut",
-        "outputs": [{ "internalType": "uint256[]", "name": "amounts", "type": "uint256[]" }],
-        "stateMutability": "view",
-        "type": "function"
-    }
-];
-
-const ERC20_ABI = [
-    {
-        "constant": true,
-        "inputs": [{ "name": "_owner", "type": "address" }],
-        "name": "balanceOf",
-        "outputs": [{ "name": "balance", "type": "uint256" }],
-        "type": "function"
-    },
-    {
-        "constant": false,
-        "inputs": [
-            { "name": "_spender", "type": "address" },
-            { "name": "_value", "type": "uint256" }
-        ],
-        "name": "approve",
-        "outputs": [{ "name": "success", "type": "bool" }],
-        "type": "function"
-    },
-    {
-        "constant": true,
-        "inputs": [
-            { "name": "_owner", "type": "address" },
-            { "name": "_spender", "type": "address" }
-        ],
-        "name": "allowance",
-        "outputs": [{ "name": "remaining", "type": "uint256" }],
-        "type": "function"
-    }
-];
-
-let web3Instance = null;
-let botRunning = false;
-let autoBuyInterval = null;
-let wallets = [];
-let currentWalletIndex = 0;
-let selectedToken = "0xa037355662d34d9b57de209e22544a4862f5a30c"; // 默认 GDOG
-let tokenSymbol = "GDOG";
-
-function log(message) {
-    const logDiv = document.getElementById("log");
-    if (!logDiv._pendingLog) {
-        logDiv._pendingLog = [];
-        setTimeout(() => {
-            logDiv.innerHTML += logDiv._pendingLog.map(msg => `<p>${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}: ${msg}</p>`).join('');
-            logDiv.scrollTop = logDiv.scrollHeight;
-            logDiv._pendingLog = null;
-        }, 50);
-    }
-    logDiv._pendingLog.push(message);
-}
-
-async function initializeWeb3() {
-    const rpcUrls = [
-        document.getElementById("rpcUrl").value.trim(),
-        "https://gatelayer-rpc.gatenode.cc",
-        "https://rpc.gatelayer.org"
-    ];
-    for (const rpcUrl of rpcUrls) {
-        if (!rpcUrl) {
-            log(`错误: 未提供 RPC URL ${rpcUrl}`);
-            continue;
-        }
-        try {
-            const provider = new Web3.providers.HttpProvider(rpcUrl, { timeout: 30000 });
-            web3Instance = new Web3(provider);
-            log(`正在测试 RPC 连接: ${rpcUrl}...`);
-            const chainId = await web3Instance.eth.getChainId();
-            log(`已连接到 RPC ${rpcUrl}, 链 ID: ${chainId}`);
-            if (chainId !== 10088) {
-                log(`警告: 预期链 ID 10088，实际为 ${chainId}，继续运行...`);
+        const WOOF_ROUTER_ABI = [
+            {
+                "inputs": [
+                    { "internalType": "uint256", "name": "amountOutMin", "type": "uint256" },
+                    { "components": [
+                        { "internalType": "address", "name": "from", "type": "address" },
+                        { "internalType": "address", "name": "to", "type": "address" },
+                        { "internalType": "bool", "name": "stable", "type": "bool" }
+                    ], "internalType": "struct Router.route[]", "name": "routes", "type": "tuple[]" },
+                    { "internalType": "address", "name": "to", "type": "address" },
+                    { "internalType": "uint256", "name": "deadline", "type": "uint256" }
+                ],
+                "name": "swapExactETHForTokens",
+                "outputs": [{ "internalType": "uint256[]", "name": "amounts", "type": "uint256[]" }],
+                "stateMutability": "payable",
+                "type": "function"
             }
-            document.getElementById("status").textContent = `状态: 已连接到 ${rpcUrl}\n`;
-            return web3Instance;
-        } catch (error) {
-            log(`无法连接到 ${rpcUrl}: ${error.message}`);
-        }
-    }
-    log("错误: 所有 RPC 连接失败，请检查网络或尝试其他 RPC URL");
-    document.getElementById("status").textContent = "状态: 所有 RPC 连接失败，请检查网络或尝试其他 RPC URL\n";
-    return null;
-}
+        ];
 
-function getRandomGTAmount() {
-    const min = parseFloat(document.getElementById("minAmount").value);
-    const max = parseFloat(document.getElementById("maxAmount").value);
-    if (isNaN(min) || isNaN(max) || min < 0 || max < min) {
-        log("警告: 无效金额区间，使用默认 0.00001-0.0001 GT");
-        return (Math.random() * (0.0001 - 0.00001) + 0.00001).toFixed(6);
-    }
-    return (Math.random() * (max - min) + min).toFixed(6);
-}
+        const GATE_ROUTER_ABI = [
+            {
+                "inputs": [
+                    { "internalType": "uint256", "name": "amountOutMin", "type": "uint256" },
+                    { "internalType": "address[]", "name": "path", "type": "address[]" },
+                    { "internalType": "address", "name": "to", "type": "address" },
+                    { "internalType": "uint256", "name": "deadline", "type": "uint256" }
+                ],
+                "name": "swapExactETHForTokens",
+                "outputs": [{ "internalType": "uint256[]", "name": "amounts", "type": "uint256[]" }],
+                "stateMutability": "payable",
+                "type": "function"
+            },
+            {
+                "inputs": [
+                    { "internalType": "uint256", "name": "amountIn", "type": "uint256" },
+                    { "internalType": "address[]", "name": "path", "type": "address[]" }
+                ],
+                "name": "getAmountsOut",
+                "outputs": [{ "internalType": "uint256[]", "name": "amounts", "type": "uint256[]" }],
+                "stateMutability": "view",
+                "type": "function"
+            }
+        ];
 
-async function waitForTransaction(txHash) {
-    let receipt = null;
-    const maxAttempts = 30;
-    let attempts = 0;
-    while (attempts < maxAttempts) {
-        receipt = await web3Instance.eth.getTransactionReceipt(txHash);
-        if (receipt) {
-            if (receipt.status) return receipt;
-            throw new Error(`交易 ${txHash} 失败`);
-        }
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        attempts++;
-    }
-    throw new Error(`交易 ${txHash} 未在 ${maxAttempts} 次尝试后确认`);
-}
+        const ERC20_ABI = [
+            {
+                "constant": true,
+                "inputs": [{ "name": "_owner", "type": "address" }],
+                "name": "balanceOf",
+                "outputs": [{ "name": "balance", "type": "uint256" }],
+                "type": "function"
+            },
+            {
+                "constant": false,
+                "inputs": [
+                    { "name": "_spender", "type": "address" },
+                    { "name": "_value", "type": "uint256" }
+                ],
+                "name": "approve",
+                "outputs": [{ "name": "success", "type": "bool" }],
+                "type": "function"
+            },
+            {
+                "constant": true,
+                "inputs": [
+                    { "name": "_owner", "type": "address" },
+                    { "name": "_spender", "type": "address" }
+                ],
+                "name": "allowance",
+                "outputs": [{ "name": "remaining", "type": "uint256" }],
+                "type": "function"
+            }
+        ];
 
-async function checkAndApproveToken(wallet, tokenAddress) {
-    const tokenContract = new web3Instance.eth.Contract(ERC20_ABI, tokenAddress);
-    const gasPrice = web3Instance.utils.toWei(document.getElementById("gasPrice").value, "gwei");
-    try {
-        const allowance = await tokenContract.methods.allowance(wallet.address, GATE_ROUTER_ADDRESS).call();
-        if (web3Instance.utils.toBN(allowance).gte(web3Instance.utils.toBN(2).pow(web3Instance.utils.toBN(256)).div(web3Instance.utils.toBN(2)))) {
-            log(`代币已授权: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}`);
-            return true;
+        const messages = {
+            statusReady: "状态: 就绪",
+            testingRPC: "正在测试 RPC 连接...",
+            connectedToChain: "已连接到链 ID: ",
+            expectedChain: " (Gate Layer 应为 10088)",
+            chainMismatch: "错误: 未连接到 Gate Layer (链 ID 应为 10088)",
+            rpcError: "错误: 无法连接到 RPC: ",
+            noPrivateKeys: "错误: 未提供私钥",
+            invalidTokenAddress: "错误: 无效的代币地址",
+            invalidGasPrice: "错误: 无效的 Gas Price",
+            invalidAmountRange: "错误: 无效的金额区间 (最小值必须 >= 0 且 <= 最大值)",
+            processingWallet: "处理钱包 ",
+            gtBalance: "GT 余额: ",
+            tokenBalance: "代币余额: ",
+            approvingToken: "正在为钱包授权代币 ",
+            alreadyApproved: "代币已授权给钱包 ",
+            buyingToken: "正在为钱包购买代币 ",
+            tradeSuccess: "交易成功！交易哈希: ",
+            errorProcessing: "处理钱包时出错 ",
+            errorMessage: ": ",
+            allProcessed: "所有钱包处理完成",
+            generalError: "错误: "
+        };
+
+        function getMessage(key) {
+            return messages[key] || key;
         }
-        log(`正在为 ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)} 授权代币...`);
-        const tx = await tokenContract.methods.approve(GATE_ROUTER_ADDRESS, web3Instance.utils.toBN(2).pow(web3Instance.utils.toBN(256)).sub(web3Instance.utils.toBN(1))).send({
-            from: wallet.address,
-            gas: 100000,
-            gasPrice
+
+        let web3Instance = null;
+        let botRunning = false;
+        let autoBuyInterval = null;
+        let wallets = [];
+        let currentWalletIndex = 0;
+        let selectedToken = "0xa037355662d34d9b57de209e22544a4862f5a30c"; // 默认 GDOG
+        let tokenSymbol = "GDOG";
+
+        function log(message) {
+            const logDiv = document.getElementById("log");
+            if (!logDiv._pendingLog) {
+                logDiv._pendingLog = [];
+                setTimeout(() => {
+                    logDiv.innerHTML += logDiv._pendingLog.map(msg => `<p>${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}: ${msg}</p>`).join('');
+                    logDiv.scrollTop = logDiv.scrollHeight;
+                    logDiv._pendingLog = null;
+                }, 50);
+            }
+            logDiv._pendingLog.push(message);
+        }
+
+        async function initializeWeb3() {
+            const rpcUrl = document.getElementById("rpcUrl").value.trim();
+            const status = document.getElementById("status");
+            const web3 = new Web3(new Web3.providers.HttpProvider(rpcUrl));
+            try {
+                status.textContent += getMessage("testingRPC") + "\n";
+                const networkChainId = await web3.eth.getChainId();
+                status.textContent += getMessage("connectedToChain") + networkChainId + getMessage("expectedChain") + "\n";
+                if (networkChainId !== 10088) {
+                    status.textContent += getMessage("chainMismatch") + "\n";
+                    status.textContent += "请尝试其他 RPC URL，如 https://gatelayer-rpc.gatenode.cc 或 https://rpc.gatelayer.org\n";
+                    return null;
+                }
+                return web3;
+            } catch (error) {
+                status.textContent += getMessage("rpcError") + error.message + "\n";
+                status.textContent += "请尝试其他 RPC URL，如 https://gatelayer-rpc.gatenode.cc 或 https://rpc.gatelayer.org\n";
+                return null;
+            }
+        }
+
+        function getRandomGTAmount() {
+            const min = parseFloat(document.getElementById("minAmount").value);
+            const max = parseFloat(document.getElementById("maxAmount").value);
+            if (isNaN(min) || isNaN(max) || min < 0 || max < min) {
+                log("警告: 无效金额区间，使用默认 0.00001-0.0001 GT");
+                return (Math.random() * (0.0001 - 0.00001) + 0.00001).toFixed(6);
+            }
+            return (Math.random() * (max - min) + min).toFixed(6);
+        }
+
+        async function waitForTransaction(txHash) {
+            let receipt = null;
+            const maxAttempts = 30;
+            let attempts = 0;
+            while (attempts < maxAttempts) {
+                receipt = await web3Instance.eth.getTransactionReceipt(txHash);
+                if (receipt) {
+                    if (receipt.status) return receipt;
+                    throw new Error(`交易 ${txHash} 失败`);
+                }
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                attempts++;
+            }
+            throw new Error(`交易 ${txHash} 未在 ${maxAttempts} 次尝试后确认`);
+        }
+
+        async function checkAndApproveToken(wallet, tokenAddress) {
+            const tokenContract = new web3Instance.eth.Contract(ERC20_ABI, tokenAddress);
+            const gasPrice = web3Instance.utils.toWei(document.getElementById("gasPrice").value, "gwei");
+            try {
+                const allowance = await tokenContract.methods.allowance(wallet.address, GATE_ROUTER_ADDRESS).call();
+                if (web3Instance.utils.toBN(allowance).gte(web3Instance.utils.toBN(2).pow(web3Instance.utils.toBN(256)).div(web3Instance.utils.toBN(2)))) {
+                    log(getMessage("alreadyApproved") + wallet.address);
+                    return true;
+                }
+                log(getMessage("approvingToken") + wallet.address + "...");
+                const tx = await tokenContract.methods.approve(GATE_ROUTER_ADDRESS, web3Instance.utils.toBN(2).pow(web3Instance.utils.toBN(256)).sub(web3Instance.utils.toBN(1))).send({
+                    from: wallet.address,
+                    gas: 100000,
+                    gasPrice
+                });
+                await waitForTransaction(tx.transactionHash);
+                log(getMessage("tradeSuccess") + "授权成功: " + wallet.address);
+                return true;
+            } catch (error) {
+                log(getMessage("errorProcessing") + wallet.address + getMessage("errorMessage") + "代币授权失败: " + error.message);
+                return false;
+            }
+        }
+
+        async function checkBalances() {
+            const status = document.getElementById("status");
+            status.textContent = getMessage("statusReady") + "\n";
+            if (!web3Instance) {
+                web3Instance = await initializeWeb3();
+                if (!web3Instance) return;
+            }
+            const privateKeys = document.getElementById("privateKeys").value.trim().split("\n").filter(key => key.length > 0);
+            if (privateKeys.length < 1) {
+                status.textContent += getMessage("noPrivateKeys") + "\n";
+                return;
+            }
+            const tokenSelect = document.getElementById("tokenSelect").value;
+            let tokenAddress = tokenSelect;
+            if (tokenSelect === "custom") {
+                tokenAddress = document.getElementById("customToken").value.trim();
+                if (!tokenAddress || !web3Instance.utils.isAddress(tokenAddress)) {
+                    status.textContent += getMessage("invalidTokenAddress") + "\n";
+                    return;
+                }
+            }
+            const tokenContract = new web3Instance.eth.Contract(ERC20_ABI, tokenAddress);
+            for (const pk of privateKeys) {
+                try {
+                    const account = web3Instance.eth.accounts.privateKeyToAccount(pk.trim());
+                    const gtBalance = await web3Instance.eth.getBalance(account.address);
+                    const tokenBalance = await tokenContract.methods.balanceOf(account.address).call();
+                    status.textContent += getMessage("processingWallet") + account.address + "\n";
+                    status.textContent += getMessage("gtBalance") + web3Instance.utils.fromWei(gtBalance, "ether") + " GT\n";
+                    status.textContent += getMessage("tokenBalance") + web3Instance.utils.fromWei(tokenBalance, "ether") + ` ${tokenSymbol}\n`;
+                    document.getElementById("gtBalance").textContent = `余额: ${web3Instance.utils.fromWei(gtBalance, "ether")} GT`;
+                    document.getElementById("tokenBalance").textContent = `余额: ${web3Instance.utils.fromWei(tokenBalance, "ether")} ${tokenSymbol}`;
+                } catch (error) {
+                    status.textContent += getMessage("errorProcessing") + pk.slice(0, 10) + "..." + getMessage("errorMessage") + error.message + "\n";
+                }
+            }
+            status.textContent += getMessage("allProcessed") + "\n";
+        }
+
+        async function purchaseWoofSwap(wallet, GTAmount) {
+            if (!document.getElementById("useWoofSwap").checked) return true;
+            try {
+                web3Instance.eth.accounts.wallet.add(wallet.privateKey);
+                const routerContract = new web3Instance.eth.Contract(WOOF_ROUTER_ABI, WOOF_ROUTER_ADDRESS);
+                const gasPrice = web3Instance.utils.toWei(document.getElementById("gasPrice").value, "gwei");
+                const gasLimit = 400000;
+                const GTAmountWei = web3Instance.utils.toWei(GTAmount.toString(), "ether");
+                const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
+                const routes = [{ from: WGT_ADDRESS, to: selectedToken, stable: false }];
+                const balance = await web3Instance.eth.getBalance(wallet.address);
+                const balanceGT = web3Instance.utils.fromWei(balance, "ether");
+                if (parseFloat(balanceGT) < parseFloat(GTAmount) + 0.01) {
+                    log(`WoofSwap: 余额不足 ${wallet.address}: ${balanceGT} GT`);
+                    document.getElementById("status").textContent += `WoofSwap: 余额不足: ${balanceGT} GT\n`;
+                    return false;
+                }
+                let attempts = 0;
+                const maxAttempts = 3;
+                let nonce = await web3Instance.eth.getTransactionCount(wallet.address, "pending");
+                while (attempts < maxAttempts) {
+                    try {
+                        const tx = await routerContract.methods.swapExactETHForTokens(0, routes, wallet.address, deadline).send({
+                            from: wallet.address,
+                            value: GTAmountWei,
+                            gas: gasLimit,
+                            gasPrice,
+                            nonce
+                        });
+                        await waitForTransaction(tx.transactionHash);
+                        const txLink = `https://www.gatescan.org/gatelayer/tx/${tx.transactionHash}`;
+                        log(getMessage("tradeSuccess") + tx.transactionHash);
+                        document.getElementById("status").textContent += `WoofSwap 购买: ${GTAmount} GT -> ${tokenSymbol}, TX: ${txLink}\n`;
+                        return true;
+                    } catch (error) {
+                        attempts++;
+                        log(`WoofSwap 购买失败 (尝试 ${attempts}/${maxAttempts}): ${error.message}`);
+                        if (error.message.includes("replacement transaction underpriced") || error.message.includes("nonce too low")) {
+                            nonce = await web3Instance.eth.getTransactionCount(wallet.address, "pending");
+                        }
+                        if (attempts === maxAttempts) {
+                            log(`WoofSwap 购买失败: ${wallet.address}: ${error.message}`);
+                            document.getElementById("status").textContent += `WoofSwap 购买失败: ${error.message}\n`;
+                            return false;
+                        }
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                    }
+                }
+            } catch (error) {
+                log(`WoofSwap 错误: ${error.message}`);
+                document.getElementById("status").textContent += `WoofSwap 错误: ${error.message}\n`;
+                return false;
+            }
+        }
+
+        async function purchaseGateSwap(wallet, GTAmount) {
+            if (!document.getElementById("useGateSwap").checked) return true;
+            try {
+                web3Instance.eth.accounts.wallet.add(wallet.privateKey);
+                const approved = await checkAndApproveToken(wallet, selectedToken);
+                if (!approved) {
+                    log(`GateSwap: 代币授权失败: ${wallet.address}`);
+                    document.getElementById("status").textContent += `GateSwap: 代币授权失败\n`;
+                    return false;
+                }
+                const routerContract = new web3Instance.eth.Contract(GATE_ROUTER_ABI, GATE_ROUTER_ADDRESS);
+                const gasPrice = web3Instance.utils.toWei(document.getElementById("gasPrice").value, "gwei");
+                const gasLimit = 400000;
+                const GTAmountWei = web3Instance.utils.toWei(GTAmount.toString(), "ether");
+                const path = [WGT_ADDRESS, selectedToken];
+                const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
+                const balance = await web3Instance.eth.getBalance(wallet.address);
+                const balanceGT = web3Instance.utils.fromWei(balance, "ether");
+                if (parseFloat(balanceGT) < parseFloat(GTAmount) + 0.01) {
+                    log(`GateSwap: 余额不足 ${wallet.address}: ${balanceGT} GT`);
+                    document.getElementById("status").textContent += `GateSwap: 余额不足: ${balanceGT} GT\n`;
+                    return false;
+                }
+                let attempts = 0;
+                const maxAttempts = 3;
+                let nonce = await web3Instance.eth.getTransactionCount(wallet.address, "pending");
+                while (attempts < maxAttempts) {
+                    try {
+                        const amounts = await routerContract.methods.getAmountsOut(GTAmountWei, path).call();
+                        const tokenAmount = web3Instance.utils.fromWei(amounts[1], "ether");
+                        const tokenAmountWei = web3Instance.utils.toWei(tokenAmount, "ether");
+                        const slippagePercent = parseFloat(document.getElementById("slippage").value) / 100;
+                        const tokenAmountMin = web3Instance.utils.toBN(tokenAmountWei).mul(web3Instance.utils.toBN(Math.floor((1 - slippagePercent) * 1000))).div(web3Instance.utils.toBN(1000));
+                        const tx = await routerContract.methods.swapExactETHForTokens(tokenAmountMin, path, wallet.address, deadline).send({
+                            from: wallet.address,
+                            value: GTAmountWei,
+                            gas: gasLimit,
+                            gasPrice,
+                            nonce
+                        });
+                        await waitForTransaction(tx.transactionHash);
+                        const txLink = `https://www.gatescan.org/gatelayer/tx/${tx.transactionHash}`;
+                        log(getMessage("tradeSuccess") + tx.transactionHash);
+                        document.getElementById("status").textContent += `GateSwap 购买: ${GTAmount} GT -> ~${parseFloat(tokenAmount).toFixed(6)} ${tokenSymbol}, TX: ${txLink}\n`;
+                        return true;
+                    } catch (error) {
+                        attempts++;
+                        log(`GateSwap 购买失败 (尝试 ${attempts}/${maxAttempts}): ${error.message}`);
+                        if (error.message.includes("replacement transaction underpriced") || error.message.includes("nonce too low")) {
+                            nonce = await web3Instance.eth.getTransactionCount(wallet.address, "pending");
+                        }
+                        if (attempts === maxAttempts) {
+                            log(`GateSwap 购买失败: ${wallet.address}: ${error.message}`);
+                            document.getElementById("status").textContent += `GateSwap 购买失败: ${error.message}\n`;
+                            return false;
+                        }
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                    }
+                }
+            } catch (error) {
+                log(`GateSwap 错误: ${error.message}`);
+                document.getElementById("status").textContent += `GateSwap 错误: ${error.message}\n`;
+                return false;
+            }
+        }
+
+        async function startBot() {
+            const status = document.getElementById("status");
+            status.textContent = getMessage("statusReady") + "\n";
+            if (botRunning) {
+                log("错误: 机器人已在运行");
+                status.textContent += "错误: 机器人已在运行\n";
+                return;
+            }
+            const privateKeys = document.getElementById("privateKeys").value.trim().split("\n").filter(key => key.length > 0);
+            const tokenSelect = document.getElementById("tokenSelect").value;
+            let tokenAddress = tokenSelect;
+            if (tokenSelect === "custom") {
+                tokenAddress = document.getElementById("customToken").value.trim();
+                if (!tokenAddress || !Web3.utils.isAddress(tokenAddress)) {
+                    log(getMessage("invalidTokenAddress"));
+                    status.textContent += getMessage("invalidTokenAddress") + "\n";
+                    return;
+                }
+                selectedToken = tokenAddress;
+                tokenSymbol = "自定义代币";
+            } else {
+                selectedToken = tokenAddress;
+                tokenSymbol = Object.keys(TOKEN_ADDRESSES).find(key => TOKEN_ADDRESSES[key].toLowerCase() === tokenAddress.toLowerCase()) || "未知";
+            }
+            const gasPrice = parseFloat(document.getElementById("gasPrice").value);
+            const minAmount = parseFloat(document.getElementById("minAmount").value);
+            const maxAmount = parseFloat(document.getElementById("maxAmount").value);
+            if (privateKeys.length < 1) {
+                log(getMessage("noPrivateKeys"));
+                status.textContent += getMessage("noPrivateKeys") + "\n";
+                return;
+            }
+            if (isNaN(gasPrice) || gasPrice <= 0) {
+                log(getMessage("invalidGasPrice"));
+                status.textContent += getMessage("invalidGasPrice") + "\n";
+                return;
+            }
+            if (isNaN(minAmount) || isNaN(maxAmount) || minAmount < 0 || maxAmount < minAmount) {
+                log(getMessage("invalidAmountRange"));
+                status.textContent += getMessage("invalidAmountRange") + "\n";
+                return;
+            }
+            if (!document.getElementById("useWoofSwap").checked && !document.getElementById("useGateSwap").checked) {
+                log("错误: 必须选择至少一个 DEX");
+                status.textContent += "错误: 必须选择至少一个 DEX\n";
+                return;
+            }
+            wallets = [];
+            for (const pk of privateKeys) {
+                try {
+                    const account = web3Instance ? web3Instance.eth.accounts.privateKeyToAccount(pk.trim()) : { address: Web3.utils.privateToAddress(pk) };
+                    log(`有效私钥: 地址 ${account.address}`);
+                    wallets.push({ address: account.address, privateKey: pk.trim() });
+                } catch (error) {
+                    log(`无效私钥: ${pk.slice(0, 10)}...: ${error.message}`);
+                }
+            }
+            if (wallets.length === 0) {
+                log("错误: 未提供有效私钥");
+                status.textContent += "错误: 未提供有效私钥\n";
+                return;
+            }
+            if (!web3Instance) {
+                web3Instance = await initializeWeb3();
+                if (!web3Instance) return;
+            }
+            botRunning = true;
+            currentWalletIndex = 0;
+            log(`加载 ${wallets.length} 个有效钱包`);
+            status.textContent += `加载 ${wallets.length} 个有效钱包\n`;
+            autoBuyInterval = setInterval(async () => {
+                if (!botRunning || !web3Instance) return;
+                const wallet = wallets[currentWalletIndex];
+                const GTAmount = getRandomGTAmount();
+                log(getMessage("buyingToken") + wallet.address + ` (索引 ${currentWalletIndex + 1}/${wallets.length}, ${GTAmount} GT)`);
+                await purchaseWoofSwap(wallet, GTAmount);
+                await purchaseGateSwap(wallet, GTAmount);
+                await checkBalances();
+                currentWalletIndex = (currentWalletIndex + 1) % wallets.length;
+            }, 10000);
+            log(`自动购买启动: 每 10 秒购买 ${tokenSymbol}，金额区间 ${minAmount}-${maxAmount} GT`);
+            status.textContent += `自动购买 ${tokenSymbol} 启动\n`;
+        }
+
+        function stopBot() {
+            if (autoBuyInterval) {
+                clearInterval(autoBuyInterval);
+                autoBuyInterval = null;
+            }
+            botRunning = false;
+            log("机器人已停止");
+            document.getElementById("status").textContent = "状态: 机器人已停止\n";
+        }
+
+        document.addEventListener("DOMContentLoaded", () => {
+            log("页面加载完成，准备启动机器人");
+            document.getElementById("tokenSelect").addEventListener("change", () => {
+                const customTokenDiv = document.getElementById("customToken").parentElement;
+                customTokenDiv.style.display = document.getElementById("tokenSelect").value === "custom" ? "block" : "none";
+            });
         });
-        await waitForTransaction(tx.transactionHash);
-        log(`代币授权成功: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}`);
-        return true;
-    } catch (error) {
-        log(`代币授权失败: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}: ${error.message}`);
-        return false;
-    }
-}
-
-async function checkBalances() {
-    const status = document.getElementById("status");
-    status.textContent = "状态: 正在检查余额...\n";
-    if (!web3Instance) {
-        const web3 = await initializeWeb3();
-        if (!web3) {
-            log("错误: Web3 未初始化");
-            status.textContent += "错误: Web3 未初始化\n";
-            return;
-        }
-        web3Instance = web3;
-    }
-    if (wallets.length === 0) {
-        log("错误: 未提供钱包");
-        status.textContent += "错误: 未提供钱包\n";
-        return;
-    }
-    const wallet = wallets[currentWalletIndex];
-    try {
-        const gtBalance = await web3Instance.eth.getBalance(wallet.address);
-        const tokenContract = new web3Instance.eth.Contract(ERC20_ABI, selectedToken);
-        const tokenBalance = await tokenContract.methods.balanceOf(wallet.address).call();
-        document.getElementById("gtBalance").textContent = `余额: ${web3Instance.utils.fromWei(gtBalance, "ether")} GT`;
-        document.getElementById("tokenBalance").textContent = `余额: ${web3Instance.utils.fromWei(tokenBalance, "ether")} ${tokenSymbol}`;
-        status.textContent += `钱包 ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)} (索引 ${currentWalletIndex + 1}/${wallets.length}):\n`;
-        status.textContent += `GT 余额: ${web3Instance.utils.fromWei(gtBalance, "ether")} GT\n`;
-        status.textContent += `${tokenSymbol} 余额: ${web3Instance.utils.fromWei(tokenBalance, "ether")} ${tokenSymbol}\n`;
-    } catch (error) {
-        log(`余额检查失败: ${error.message}`);
-        status.textContent += `错误: 余额检查失败 - ${error.message}\n`;
-    }
-}
-
-async function purchaseWoofSwap(wallet, GTAmount) {
-    if (!document.getElementById("useWoofSwap").checked) return true;
-    try {
-        web3Instance.eth.accounts.wallet.add(wallet.privateKey);
-        const routerContract = new web3Instance.eth.Contract(WOOF_ROUTER_ABI, WOOF_ROUTER_ADDRESS);
-        const gasPrice = web3Instance.utils.toWei(document.getElementById("gasPrice").value, "gwei");
-        const gasLimit = 400000;
-        const GTAmountWei = web3Instance.utils.toWei(GTAmount.toString(), "ether");
-        const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
-        const routes = [{ from: WGT_ADDRESS, to: selectedToken, stable: false }];
-        const balance = await web3Instance.eth.getBalance(wallet.address);
-        const balanceGT = web3Instance.utils.fromWei(balance, "ether");
-        if (parseFloat(balanceGT) < parseFloat(GTAmount) + 0.01) {
-            log(`WoofSwap: 余额不足 ${wallet.address.slice(0, 6)}...: ${balanceGT} GT`);
-            document.getElementById("status").textContent += `WoofSwap: 余额不足: ${balanceGT} GT\n`;
-            return false;
-        }
-        let attempts = 0;
-        const maxAttempts = 3;
-        let nonce = await web3Instance.eth.getTransactionCount(wallet.address, "pending");
-        while (attempts < maxAttempts) {
-            try {
-                const tx = await routerContract.methods.swapExactETHForTokens(0, routes, wallet.address, deadline).send({
-                    from: wallet.address,
-                    value: GTAmountWei,
-                    gas: gasLimit,
-                    gasPrice,
-                    nonce
-                });
-                await waitForTransaction(tx.transactionHash);
-                const txLink = `https://www.gatescan.org/gatelayer/tx/${tx.transactionHash}`;
-                log(`WoofSwap 购买成功: ${tx.transactionHash}`);
-                document.getElementById("status").textContent += `WoofSwap 购买: ${GTAmount} GT -> ${tokenSymbol}, TX: ${txLink}\n`;
-                return true;
-            } catch (error) {
-                attempts++;
-                log(`WoofSwap 购买失败 (尝试 ${attempts}/${maxAttempts}): ${error.message}`);
-                if (error.message.includes("replacement transaction underpriced") || error.message.includes("nonce too low")) {
-                    nonce = await web3Instance.eth.getTransactionCount(wallet.address, "pending");
-                }
-                if (attempts === maxAttempts) {
-                    log(`WoofSwap 购买失败: ${wallet.address.slice(0, 6)}...: ${error.message}`);
-                    document.getElementById("status").textContent += `WoofSwap 购买失败: ${error.message}\n`;
-                    return false;
-                }
-                await new Promise(resolve => setTimeout(resolve, 2000));
-            }
-        }
-    } catch (error) {
-        log(`WoofSwap 错误: ${error.message}`);
-        document.getElementById("status").textContent += `WoofSwap 错误: ${error.message}\n`;
-        return false;
-    }
-}
-
-async function purchaseGateSwap(wallet, GTAmount) {
-    if (!document.getElementById("useGateSwap").checked) return true;
-    try {
-        web3Instance.eth.accounts.wallet.add(wallet.privateKey);
-        const approved = await checkAndApproveToken(wallet, selectedToken);
-        if (!approved) {
-            log(`GateSwap: 代币授权失败: ${wallet.address.slice(0, 6)}...`);
-            document.getElementById("status").textContent += `GateSwap: 代币授权失败\n`;
-            return false;
-        }
-        const routerContract = new web3Instance.eth.Contract(GATE_ROUTER_ABI, GATE_ROUTER_ADDRESS);
-        const gasPrice = web3Instance.utils.toWei(document.getElementById("gasPrice").value, "gwei");
-        const gasLimit = 10000000;
-        const GTAmountWei = web3Instance.utils.toWei(GTAmount.toString(), "ether");
-        const path = [WGT_ADDRESS, selectedToken];
-        const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
-        const balance = await web3Instance.eth.getBalance(wallet.address);
-        const balanceGT = web3Instance.utils.fromWei(balance, "ether");
-        if (parseFloat(balanceGT) < parseFloat(GTAmount) + 0.01) {
-            log(`GateSwap: 余额不足 ${wallet.address.slice(0, 6)}...: ${balanceGT} GT`);
-            document.getElementById("status").textContent += `GateSwap: 余额不足: ${balanceGT} GT\n`;
-            return false;
-        }
-        let attempts = 0;
-        const maxAttempts = 3;
-        let nonce = await web3Instance.eth.getTransactionCount(wallet.address, "pending");
-        while (attempts < maxAttempts) {
-            try {
-                const amounts = await routerContract.methods.getAmountsOut(GTAmountWei, path).call();
-                const tokenAmount = web3Instance.utils.fromWei(amounts[1], "ether");
-                const tokenAmountWei = web3Instance.utils.toWei(tokenAmount, "ether");
-                const slippagePercent = parseFloat(document.getElementById("slippage").value) / 100;
-                const tokenAmountMin = web3Instance.utils.toBN(tokenAmountWei).mul(web3Instance.utils.toBN(Math.floor((1 - slippagePercent) * 1000))).div(web3Instance.utils.toBN(1000));
-                const tx = await routerContract.methods.swapExactETHForTokens(tokenAmountMin, path, wallet.address, deadline).send({
-                    from: wallet.address,
-                    value: GTAmountWei,
-                    gas: gasLimit,
-                    gasPrice,
-                    nonce
-                });
-                await waitForTransaction(tx.transactionHash);
-                const txLink = `https://www.gatescan.org/gatelayer/tx/${tx.transactionHash}`;
-                log(`GateSwap 购买成功: ${tx.transactionHash}`);
-                document.getElementById("status").textContent += `GateSwap 购买: ${GTAmount} GT -> ~${parseFloat(tokenAmount).toFixed(6)} ${tokenSymbol}, TX: ${txLink}\n`;
-                return true;
-            } catch (error) {
-                attempts++;
-                log(`GateSwap 购买失败 (尝试 ${attempts}/${maxAttempts}): ${error.message}`);
-                if (error.message.includes("replacement transaction underpriced") || error.message.includes("nonce too low")) {
-                    nonce = await web3Instance.eth.getTransactionCount(wallet.address, "pending");
-                }
-                if (attempts === maxAttempts) {
-                    log(`GateSwap 购买失败: ${wallet.address.slice(0, 6)}...: ${error.message}`);
-                    document.getElementById("status").textContent += `GateSwap 购买失败: ${error.message}\n`;
-                    return false;
-                }
-                await new Promise(resolve => setTimeout(resolve, 2000));
-            }
-        }
-    } catch (error) {
-        log(`GateSwap 错误: ${error.message}`);
-        document.getElementById("status").textContent += `GateSwap 错误: ${error.message}\n`;
-        return false;
-    }
-}
-
-async function startBot() {
-    if (botRunning) {
-        log("错误: 机器人已在运行");
-        document.getElementById("status").textContent = "状态: 机器人已在运行\n";
-        return;
-    }
-    const privateKeysInput = document.getElementById("privateKeys").value.trim();
-    if (!privateKeysInput) {
-        log("错误: 未提供私钥");
-        document.getElementById("status").textContent = "状态: 未提供私钥\n";
-        return;
-    }
-    if (!document.getElementById("useWoofSwap").checked && !document.getElementById("useGateSwap").checked) {
-        log("错误: 必须选择至少一个 DEX");
-        document.getElementById("status").textContent = "状态: 必须选择至少一个 DEX\n";
-        return;
-    }
-    const minAmount = parseFloat(document.getElementById("minAmount").value);
-    const maxAmount = parseFloat(document.getElementById("maxAmount").value);
-    if (isNaN(minAmount) || isNaN(maxAmount) || minAmount < 0 || maxAmount < minAmount) {
-        log("错误: 无效金额区间 (最小值必须 >= 0 且 <= 最大值)");
-        document.getElementById("status").textContent = "状态: 无效金额区间\n";
-        return;
-    }
-    const tokenSelect = document.getElementById("tokenSelect").value;
-    if (tokenSelect === "custom") {
-        const customToken = document.getElementById("customToken").value.trim();
-        if (!customToken || !Web3.utils.isAddress(customToken)) {
-            log("错误: 无效的自定义代币地址");
-            document.getElementById("status").textContent = "状态: 无效的自定义代币地址\n";
-            return;
-        }
-        selectedToken = customToken;
-        tokenSymbol = "自定义代币";
-    } else {
-        selectedToken = tokenSelect;
-        tokenSymbol = Object.keys(TOKEN_ADDRESSES).find(key => TOKEN_ADDRESSES[key].toLowerCase() === selectedToken.toLowerCase()) || "未知";
-    }
-    const keys = privateKeysInput.split('\n').map(key => key.trim()).filter(key => key);
-    log(`处理 ${keys.length} 个私钥: ${keys.map(k => k.slice(0, 10) + '...').join(', ')}`);
-    wallets = [];
-    for (let index = 0; index < keys.length; index++) {
-        const key = keys[index];
-        if (!key.startsWith('0x') || key.length !== 66 || !Web3.utils.isHexStrict(key.slice(2))) {
-            log(`无效私钥（第 ${index + 1} 行）: ${key.slice(0, 10)}... (需以 0x 开头，66 位，仅限十六进制字符)`);
-            continue;
-        }
-        try {
-            const account = web3Instance ? web3Instance.eth.accounts.privateKeyToAccount(key) : { address: Web3.utils.privateToAddress(key) };
-            log(`有效私钥（第 ${index + 1} 行）: 地址 ${account.address.slice(0, 6)}...${account.address.slice(-4)}`);
-            wallets.push({ address: account.address, privateKey: key });
-        } catch (error) {
-            log(`无效私钥（第 ${index + 1} 行）: ${error.message}`);
-        }
-    }
-    if (wallets.length === 0) {
-        log("错误: 未提供有效私钥");
-        document.getElementById("status").textContent = "状态: 未提供有效私钥\n";
-        return;
-    }
-    log(`加载 ${wallets.length} 个有效钱包`);
-    document.getElementById("status").textContent = `状态: 加载 ${wallets.length} 个有效钱包\n`;
-    if (!web3Instance) {
-        web3Instance = await initializeWeb3();
-        if (!web3Instance) return;
-    }
-    botRunning = true;
-    currentWalletIndex = 0;
-    autoBuyInterval = setInterval(async () => {
-        if (!botRunning || !web3Instance) return;
-        const wallet = wallets[currentWalletIndex];
-        const GTAmount = getRandomGTAmount();
-        log(`使用钱包 ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)} (索引 ${currentWalletIndex + 1}/${wallets.length}) 购买 ${GTAmount} GT 的 ${tokenSymbol}`);
-        await purchaseWoofSwap(wallet, GTAmount);
-        await purchaseGateSwap(wallet, GTAmount);
-        await checkBalances();
-        currentWalletIndex = (currentWalletIndex + 1) % wallets.length;
-    }, 10000);
-    log(`自动购买启动: 每 10 秒购买 ${tokenSymbol}，金额区间 ${minAmount}-${maxAmount} GT`);
-    document.getElementById("status").textContent += `状态: 自动购买 ${tokenSymbol} 启动\n`;
-}
-
-function stopBot() {
-    if (autoBuyInterval) {
-        clearInterval(autoBuyInterval);
-        autoBuyInterval = null;
-    }
-    botRunning = false;
-    log("机器人已停止");
-    document.getElementById("status").textContent = "状态: 机器人已停止\n";
-}
-
-document.addEventListener("DOMContentLoaded", () => {
-    log("页面加载完成，准备启动机器人");
-    document.getElementById("tokenSelect").addEventListener("change", () => {
-        const customTokenDiv = document.getElementById("customToken").parentElement;
-        customTokenDiv.style.display = document.getElementById("tokenSelect").value === "custom" ? "block" : "none";
-    });
-});
     </script>
 </body>
 </html>
