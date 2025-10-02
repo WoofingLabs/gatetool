@@ -27,6 +27,8 @@
         <label>Gate Layer RPC URL: <input type="text" id="rpcUrl" value="https://gatelayer-mainnet.gatenode.cc"></label>
         <label>Gas Price (Gwei): <input type="number" id="gasPrice" value="0.3" step="0.1" min="0"></label>
         <label>Slippage Tolerance (%): <input type="number" id="slippage" value="0.5" step="0.1" min="0"></label>
+        <label>Min Buy Amount (GT): <input type="number" id="minAmount" value="0.00001" step="0.000001" min="0"></label>
+        <label>Max Buy Amount (GT): <input type="number" id="maxAmount" value="0.0001" step="0.000001" min="0"></label>
         <label>Private Keys (one per line): <textarea id="privateKeys" placeholder="0xkey1\n0xkey2\n0xkey3"></textarea>
         <label>Select DEX:
             <div class="checkbox-group">
@@ -164,8 +166,11 @@ async function initializeWeb3() {
 }
 
 function getRandomGTAmount() {
-    const min = 0.00001;
-    const max = 0.0001;
+    const min = parseFloat(document.getElementById("minAmount").value);
+    const max = parseFloat(document.getElementById("maxAmount").value);
+    if (isNaN(min) || isNaN(max) || min < 0 || max < min) {
+        return (Math.random() * (0.0001 - 0.00001) + 0.00001).toFixed(6);
+    }
     return (Math.random() * (max - min) + min).toFixed(6);
 }
 
@@ -304,6 +309,13 @@ async function initBot() {
         document.getElementById("status").textContent = "Status: At least one DEX must be selected\n";
         return;
     }
+    const minAmount = parseFloat(document.getElementById("minAmount").value);
+    const maxAmount = parseFloat(document.getElementById("maxAmount").value);
+    if (isNaN(minAmount) || isNaN(maxAmount) || minAmount < 0 || maxAmount < minAmount) {
+        log("Error: Invalid amount range (min must be >= 0 and <= max)");
+        document.getElementById("status").textContent = "Status: Invalid amount range\n";
+        return;
+    }
     const tokenSelect = document.getElementById("tokenSelect").value;
     if (tokenSelect === "custom") {
         const customToken = document.getElementById("customToken").value.trim();
@@ -355,7 +367,7 @@ async function initBot() {
         await checkBalances();
         currentWalletIndex = (currentWalletIndex + 1) % wallets.length;
     }, 10000);
-    log(`Auto buy started: ${tokenSymbol} every 10 seconds with 0.00001-0.0001 GT`);
+    log(`Auto buy started: ${tokenSymbol} every 10 seconds with ${minAmount}-${maxAmount} GT`);
     document.getElementById("status").textContent += `Auto buy started for ${tokenSymbol}\n`;
 }
 
