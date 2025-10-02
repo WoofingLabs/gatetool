@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GateSwap & WoofSwap Bot</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f4f4f4; }
+        h1 { color: #333; }
+        button { padding: 10px 20px; background-color: #4CAF50; color: white; border: none; cursor: pointer; margin-right: 10px; border-radius: 5px; }
+        button:hover { background-color: #45a049; }
+        #status { margin-top: 10px; white-space: pre-wrap; color: #333; }
+        .settings { margin: 10px 0; background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .settings label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; }
+        .settings input, .settings textarea, .settings select { width: 100%; max-width: 400px; padding: 8px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 5px; font-size: 14px; }
+        .settings textarea { height: 100px; resize: vertical; }
+        .settings .checkbox-group { margin-bottom: 10px; }
+        .settings .checkbox-group label { display: inline-block; margin-right: 20px; }
+        #log { height: 200px; overflow-y: scroll; border: 1px solid #ccc; padding: 10px; background: white; margin-top: 10px; border-radius: 5px; }
+        .balance-row { display: flex; justify-content: space-between; font-size: 0.9em; margin-bottom: 10px; color: #ff9100; }
+    </style>
+</head>
+<body>
+    <h1>GateSwap & WoofSwap Bot</h1>
+    <div class="settings">
+        <h2>Settings</h2>
+        <label>Gate Layer RPC URL: <input type="text" id="rpcUrl" value="https://gatelayer-mainnet.gatenode.cc"></label>
+        <label>Gas Price (Gwei): <input type="number" id="gasPrice" value="0.3" step="0.1" min="0"></label>
+        <label>Slippage Tolerance (%): <input type="number" id="slippage" value="0.5" step="0.1" min="0"></label>
+        <label>Private Keys (one per line): <textarea id="privateKeys" placeholder="0xkey1\n0xkey2\n0xkey3"></textarea>
+        <label>Select DEX:
+            <div class="checkbox-group">
+                <label><input type="checkbox" id="useWoofSwap" checked> WoofSwap</label>
+                <label><input type="checkbox" id="useGateSwap" checked> GateSwap</label>
+            </div>
+        </label>
+        <label>Select Token:
+            <select id="tokenSelect">
+                <option value="0xa037355662d34d9b57de209e22544a4862f5a30c">GDOG</option>
+                <option value="0x448b6637bc794366D95D26F2EC5D076d5f1293DC">GCAT</option>
+                <option value="0x8e0474a49163f1764d56a9fd9342b87f1d1aec00">LUCKY</option>
+                <option value="custom">Custom</option>
+            </select>
+        </label>
+        <label>Custom Token Address: <input type="text" id="customToken" placeholder="Enter token address (0x...)"></label>
+    </div>
+    <button onclick="initBot()">Start Bot</button>
+    <button onclick="stopBot()">Stop Bot</button>
+    <button onclick="checkBalances()">Check Balances</button>
+    <div class="balance-row"><span>GT Balance</span><span id="gtBalance">Balance: 0</span></div>
+    <div class="balance-row"><span>Token Balance</span><span id="tokenBalance">Balance: 0</span></div>
+    <div id="status">Status: Ready</div>
+    <div id="log"></div>
+    <script src="https://cdn.jsdelivr.net/npm/web3@1.7.4/dist/web3.min.js"></script>
+    <script>
+const WOOF_ROUTER_ADDRESS = "0x5c005d074E25b89db97A32087C06D154D8CB2D5b";
+const GATE_ROUTER_ADDRESS = "0x12814690f59a9ce8ba87dc8cf0692442baa9c097";
+const WGT_ADDRESS = "0x6803b8e93b13941f6b73b82e324b80251b3de338";
+const TOKEN_ADDRESSES = {
+    "GDOG": "0xa037355662d34d9b57de209e22544a4862f5a30c",
+    "GCAT": "0x448b6637bc794366D95D26F2EC5D076d5f1293DC",
+    "LUCKY": "0x8e0474a49163f1764d56a9fd9342b87f1d1aec00"
+};
+
+const WOOF_ROUTER_ABI = [
+    {
+        "inputs": [
+            { "internalType": "uint256", "name": "amountOutMin", "type": "uint256" },
+            { "components": [
+                { "internalType": "address", "name": "from", "type": "address" },
+                { "internalType": "address", "name": "to", "type": "address" },
+                { "internalType": "bool", "name": "stable", "type": "bool" }
+            ], "internalType": "struct Router.route[]", "name": "routes", "type": "tuple[]" },
+            { "internalType": "address", "name": "to", "type": "address" },
+            { "internalType": "uint256", "name": "deadline", "type": "uint256" }
+        ],
+        "name": "swapExactETHForTokens",
+        "outputs": [{ "internalType": "uint256[]", "name": "amounts", "type": "uint256[]" }],
+        "stateMutability": "payable",
+        "type": "function"
+    }
+];
+
+const GATE_ROUTER_ABI = [
+    {
+        "inputs": [
+            { "internalType": "uint256", "name": "amountOutMin", "type": "uint256" },
+            { "internalType": "address[]", "name": "path", "type": "address[]" },
+            { "internalType": "address", "name": "to", "type": "address" },
+            { "internalType": "uint256", "name": "deadline", "type": "uint256" }
+        ],
+        "name": "swapExactETHForTokens",
+        "outputs": [{ "internalType": "uint256[]", "name": "amounts", "type": "uint256[]" }],
+        "stateMutability": "payable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            { "internalType": "uint256", "name": "amountIn", "type": "uint256" },
+            { "internalType": "address[]", "name": "path", "type": "address[]" }
+        ],
+        "name": "getAmountsOut",
+        "outputs": [{ "internalType": "uint256[]", "name": "amounts", "type": "uint256[]" }],
+        "stateMutability": "view",
+        "type": "function"
+    }
+];
+
+const ERC20_ABI = [
+    {
+        "constant": true,
+        "inputs": [{ "name": "_owner", "type": "address" }],
+        "name": "balanceOf",
+        "outputs": [{ "name": "balance", "type": "uint256" }],
+        "type": "function"
+    }
+];
+
+let web3Instance = null;
+let botRunning = false;
+let autoBuyInterval = null;
+let wallets = [];
+let currentWalletIndex = 0;
+let selectedToken = "0xa037355662d34d9b57de209e22544a4862f5a30c"; // 默认 GDOG
+let tokenSymbol = "GDOG";
+
+function log(message) {
+    const logDiv = document.getElementById("log");
+    if (!logDiv._pendingLog) {
+        logDiv._pendingLog = [];
+        setTimeout(() => {
+            logDiv.innerHTML += logDiv._pendingLog.map(msg => `<p>${new Date().toLocaleString()}: ${msg}</p>`).join('');
+            logDiv.scrollTop = logDiv.scrollHeight;
+            logDiv._pendingLog = null;
+        }, 50);
+    }
+    logDiv._pendingLog.push(message);
+}
+
+async function initializeWeb3() {
+    const rpcUrl = document.getElementById("rpcUrl").value.trim();
+    if (!rpcUrl) {
+        log("Error: No RPC URL provided");
+        document.getElementById("status").textContent = "Status: No RPC URL provided\n";
+        return null;
+    }
+    try {
+        const provider = new Web3.providers.HttpProvider(rpcUrl, { timeout: 10000 });
+        const web3 = new Web3(provider);
+        const chainId = await web3.eth.getChainId();
+        if (chainId !== 10088) {
+            log("Error: Not connected to Gate Layer (chain ID 10088)");
+            document.getElementById("status").textContent = "Status: Not connected to Gate Layer\n";
+            return null;
+        }
+        log("Web3 initialized successfully");
+        document.getElementById("status").textContent = "Status: Connected to Gate Layer\n";
+        return web3;
+    } catch (error) {
+        log(`Web3 initialization failed: ${error.message}`);
+        document.getElementById("status").textContent = `Status: Web3 initialization failed - ${error.message}\n`;
+        return null;
+    }
+}
+
+function getRandomGTAmount() {
+    const min = 0.00001;
+    const max = 0.0001;
+    return (Math.random() * (max - min) + min).toFixed(6);
+}
+
+async function checkBalances() {
+    const status = document.getElementById("status");
+    status.textContent = "Status: Checking balances...\n";
+    if (!web3Instance) {
+        status.textContent += "Error: Web3 not initialized\n";
+        return;
+    }
+    if (wallets.length === 0) {
+        status.textContent += "Error: No wallets provided\n";
+        return;
+    }
+    const wallet = wallets[currentWalletIndex];
+    try {
+        const gtBalance = await web3Instance.eth.getBalance(wallet.address);
+        const tokenContract = new web3Instance.eth.Contract(ERC20_ABI, selectedToken);
+        const tokenBalance = await tokenContract.methods.balanceOf(wallet.address).call();
+        document.getElementById("gtBalance").textContent = `Balance: ${web3Instance.utils.fromWei(gtBalance, "ether")} GT`;
+        document.getElementById("tokenBalance").textContent = `Balance: ${web3Instance.utils.fromWei(tokenBalance, "ether")} ${tokenSymbol}`;
+        status.textContent += `Wallet ${wallet.address} (Index ${currentWalletIndex + 1}/${wallets.length}):\n`;
+        status.textContent += `GT Balance: ${web3Instance.utils.fromWei(gtBalance, "ether")} GT\n`;
+        status.textContent += `${tokenSymbol} Balance: ${web3Instance.utils.fromWei(tokenBalance, "ether")} ${tokenSymbol}\n`;
+    } catch (error) {
+        log(`Balance check failed: ${error.message}`);
+        status.textContent += `Error: Balance check failed - ${error.message}\n`;
+    }
+}
+
+async function purchaseWoofSwap(wallet, GTAmount) {
+    if (!document.getElementById("useWoofSwap").checked) return true;
+    web3Instance.eth.accounts.wallet.add(wallet.privateKey);
+    const routerContract = new web3Instance.eth.Contract(WOOF_ROUTER_ABI, WOOF_ROUTER_ADDRESS);
+    let gasPrice = await web3Instance.eth.getGasPrice();
+    gasPrice = web3Instance.utils.toBN(gasPrice).mul(web3Instance.utils.toBN(11)).div(web3Instance.utils.toBN(10)).toString();
+    const gasLimit = 400000;
+    const GTAmountWei = web3Instance.utils.toWei(GTAmount.toString(), "ether");
+    const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
+    const routes = [{ from: WGT_ADDRESS, to: selectedToken, stable: false }];
+    const balance = await web3Instance.eth.getBalance(wallet.address);
+    const balanceGT = web3Instance.utils.fromWei(balance, "ether");
+    if (parseFloat(balanceGT) < parseFloat(GTAmount) + 0.01) {
+        log(`WoofSwap: Low balance for ${wallet.address}: ${balanceGT} GT`);
+        document.getElementById("status").textContent += `WoofSwap: Low balance for ${wallet.address}: ${balanceGT} GT\n`;
+        return false;
+    }
+    let attempts = 0;
+    const maxAttempts = 3;
+    let nonce = await web3Instance.eth.getTransactionCount(wallet.address, "pending");
+    while (attempts < maxAttempts) {
+        try {
+            const tx = await routerContract.methods.swapExactETHForTokens(0, routes, wallet.address, deadline).send({
+                from: wallet.address,
+                value: GTAmountWei,
+                gas: gasLimit,
+                gasPrice,
+                nonce
+            });
+            const txLink = `https://www.gatescan.org/gatelayer/tx/${tx.transactionHash}`;
+            log(`WoofSwap Buy successful: ${tx.transactionHash}`);
+            document.getElementById("status").textContent += `WoofSwap Buy: ${GTAmount} GT -> ${tokenSymbol}, TX: ${txLink}\n`;
+            return true;
+        } catch (error) {
+            attempts++;
+            log(`WoofSwap Buy failed (attempt ${attempts}/${maxAttempts}): ${error.message}`);
+            if (error.message.includes("replacement transaction underpriced")) {
+                gasPrice = web3Instance.utils.toBN(gasPrice).mul(web3Instance.utils.toBN(12)).div(web3Instance.utils.toBN(10)).toString();
+            } else if (error.message.includes("nonce too low")) {
+                nonce = await web3Instance.eth.getTransactionCount(wallet.address, "pending");
+            }
+            if (attempts === maxAttempts) {
+                log(`WoofSwap Buy failed for ${wallet.address}: ${error.message}`);
+                document.getElementById("status").textContent += `WoofSwap Buy failed for ${wallet.address}: ${error.message}\n`;
+                return false;
+            }
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+    }
+    return false;
+}
+
+async function purchaseGateSwap(wallet, GTAmount) {
+    if (!document.getElementById("useGateSwap").checked) return true;
+    web3Instance.eth.accounts.wallet.add(wallet.privateKey);
+    const routerContract = new web3Instance.eth.Contract(GATE_ROUTER_ABI, GATE_ROUTER_ADDRESS);
+    const gasPrice = web3Instance.utils.toWei(document.getElementById("gasPrice").value, "gwei");
+    const gasLimit = 10000000;
+    const GTAmountWei = web3Instance.utils.toWei(GTAmount.toString(), "ether");
+    const path = [WGT_ADDRESS, selectedToken];
+    const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
+    const balance = await web3Instance.eth.getBalance(wallet.address);
+    const balanceGT = web3Instance.utils.fromWei(balance, "ether");
+    if (parseFloat(balanceGT) < parseFloat(GTAmount) + 0.01) {
+        log(`GateSwap: Low balance for ${wallet.address}: ${balanceGT} GT`);
+        document.getElementById("status").textContent += `GateSwap: Low balance for ${wallet.address}: ${balanceGT} GT\n`;
+        return false;
+    }
+    try {
+        const amounts = await routerContract.methods.getAmountsOut(GTAmountWei, path).call();
+        const tokenAmount = web3Instance.utils.fromWei(amounts[1], "ether");
+        const tokenAmountWei = web3Instance.utils.toWei(tokenAmount, "ether");
+        const slippagePercent = parseFloat(document.getElementById("slippage").value) / 100;
+        const tokenAmountMin = web3Instance.utils.toBN(tokenAmountWei).mul(web3Instance.utils.toBN(Math.floor((1 - slippagePercent) * 1000))).div(web3Instance.utils.toBN(1000));
+        const tx = await routerContract.methods.swapExactETHForTokens(tokenAmountMin, path, wallet.address, deadline).send({
+            from: wallet.address,
+            value: GTAmountWei,
+            gas: gasLimit,
+            gasPrice
+        });
+        const txLink = `https://www.gatescan.org/gatelayer/tx/${tx.transactionHash}`;
+        log(`GateSwap Buy successful: ${tx.transactionHash}`);
+        document.getElementById("status").textContent += `GateSwap Buy: ${GTAmount} GT -> ~${parseFloat(tokenAmount).toFixed(6)} ${tokenSymbol}, TX: ${txLink}\n`;
+        return true;
+    } catch (error) {
+        log(`GateSwap Buy failed for ${wallet.address}: ${error.message}`);
+        document.getElementById("status").textContent += `GateSwap Buy failed for ${wallet.address}: ${error.message}\n`;
+        return false;
+    }
+}
+
+async function initBot() {
+    if (botRunning) {
+        log("Bot already running");
+        document.getElementById("status").textContent = "Status: Bot already running\n";
+        return;
+    }
+    const privateKeysInput = document.getElementById("privateKeys").value.trim();
+    if (!privateKeysInput) {
+        log("Error: No private keys provided");
+        document.getElementById("status").textContent = "Status: No private keys provided\n";
+        return;
+    }
+    if (!document.getElementById("useWoofSwap").checked && !document.getElementById("useGateSwap").checked) {
+        log("Error: At least one DEX must be selected");
+        document.getElementById("status").textContent = "Status: At least one DEX must be selected\n";
+        return;
+    }
+    const tokenSelect = document.getElementById("tokenSelect").value;
+    if (tokenSelect === "custom") {
+        const customToken = document.getElementById("customToken").value.trim();
+        if (!customToken || !web3Instance.utils.isAddress(customToken)) {
+            log("Error: Invalid custom token address");
+            document.getElementById("status").textContent = "Status: Invalid custom token address\n";
+            return;
+        }
+        selectedToken = customToken;
+        tokenSymbol = "Custom Token";
+    } else {
+        selectedToken = tokenSelect;
+        tokenSymbol = Object.keys(TOKEN_ADDRESSES).find(key => TOKEN_ADDRESSES[key].toLowerCase() === selectedToken.toLowerCase()) || "Unknown";
+    }
+    const keys = privateKeysInput.split('\n').map(key => key.trim()).filter(key => key);
+    log(`Processing ${keys.length} private keys`);
+    wallets = keys.map((key, index) => {
+        if (!key.startsWith('0x') || key.length !== 66) {
+            log(`Invalid private key at line ${index + 1}: ${key.slice(0, 10)}... (skipped)`);
+            return null;
+        }
+        try {
+            const wallet = web3Instance.eth.accounts.privateKeyToAccount(key);
+            log(`Valid private key at line ${index + 1}: Address ${wallet.address}`);
+            return wallet;
+        } catch (error) {
+            log(`Invalid private key at line ${index + 1}: ${error.message}`);
+            return null;
+        }
+    }).filter(wallet => wallet);
+    if (wallets.length === 0) {
+        log("Error: No valid private keys provided");
+        document.getElementById("status").textContent = "Status: No valid private keys provided\n";
+        return;
+    }
+    log(`Loaded ${wallets.length} valid wallets`);
+    document.getElementById("status").textContent = `Status: Loaded ${wallets.length} wallets\n`;
+    web3Instance = await initializeWeb3();
+    if (!web3Instance) return;
+    botRunning = true;
+    currentWalletIndex = 0;
+    autoBuyInterval = setInterval(async () => {
+        if (!botRunning || !web3Instance) return;
+        const wallet = wallets[currentWalletIndex];
+        const GTAmount = getRandomGTAmount();
+        log(`Using wallet ${wallet.address} (Index ${currentWalletIndex + 1}/${wallets.length}) for buying ${GTAmount} GT of ${tokenSymbol}`);
+        await purchaseWoofSwap(wallet, GTAmount);
+        await purchaseGateSwap(wallet, GTAmount);
+        await checkBalances();
+        currentWalletIndex = (currentWalletIndex + 1) % wallets.length;
+    }, 10000);
+    log(`Auto buy started: ${tokenSymbol} every 10 seconds with 0.00001-0.0001 GT`);
+    document.getElementById("status").textContent += `Auto buy started for ${tokenSymbol}\n`;
+}
+
+function stopBot() {
+    if (autoBuyInterval) {
+        clearInterval(autoBuyInterval);
+        autoBuyInterval = null;
+    }
+    botRunning = false;
+    log("Bot stopped");
+    document.getElementById("status").textContent = "Status: Bot stopped\n";
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    log("Page loaded, ready to start bot");
+    document.getElementById("tokenSelect").addEventListener("change", () => {
+        const customTokenDiv = document.getElementById("customToken").parentElement;
+        customTokenDiv.style.display = document.getElementById("tokenSelect").value === "custom" ? "block" : "none";
+    });
+});
+    </script>
+</body>
+</html>
