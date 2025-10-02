@@ -14,7 +14,7 @@
             --card-bg: #2c2f48;
             --input-bg: #373b5c;
             --text-color: #ffffff;
-            --border-radius: 10px;
+            --border-radius: 8px;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -33,7 +33,7 @@
             background: var(--card-bg);
             box-shadow: 0 4px 16px rgba(0,0,0,0.2);
             border-radius: var(--border-radius);
-            padding: 12px;
+            padding: 10px;
         }
         .header {
             background: linear-gradient(90deg, var(--secondary-color) 0%, var(--primary-color) 100%);
@@ -44,6 +44,7 @@
             font-weight: 600;
             margin-bottom: 10px;
         }
+        .settings { margin: 5px 0; }
         .settings label {
             margin-bottom: 2px;
             font-weight: bold;
@@ -61,7 +62,7 @@
             font-size: 0.85em;
             margin-bottom: 5px;
         }
-        .settings textarea { height: 50px; resize: vertical; }
+        .settings textarea { height: 80px; resize: vertical; }
         .settings .checkbox-group {
             margin-bottom: 5px;
             display: flex;
@@ -84,7 +85,6 @@
             margin-bottom: 5px;
         }
         button:hover { background: #e68a00; }
-        button:disabled { background: #4a4f7a; cursor: not-allowed; }
         .balance-row {
             display: flex;
             justify-content: space-between;
@@ -137,7 +137,7 @@
             </label>
             <label>Custom Token: <input type="text" id="customToken" placeholder="0x..."></label>
         </div>
-        <button onclick="initBot()">Start Bot</button>
+        <button onclick="startBot()">Start Bot</button>
         <button onclick="stopBot()">Stop Bot</button>
         <button onclick="checkBalances()">Check Balances</button>
         <div class="balance-row"><span>GT Balance</span><span id="gtBalance">Balance: 0</span></div>
@@ -207,18 +207,28 @@ const ERC20_ABI = [
         "name": "balanceOf",
         "outputs": [{ "name": "balance", "type": "uint256" }],
         "type": "function"
+    },
+    {
+        "constant": false,
+        "inputs": [
+            { "name": "_spender", "type": "address" },
+            { "name": "_value", "type": "uint256" }
+        ],
+        "name": "approve",
+        "outputs": [{ "name": "success", "type": "bool" }],
+        "type": "function"
+    },
+    {
+        "constant": true,
+        "inputs": [
+            { "name": "_owner", "type": "address" },
+            { "name": "_spender", "type": "address" }
+        ],
+        "name": "allowance",
+        "outputs": [{ "name": "remaining", "type": "uint256" }],
+        "type": "function"
     }
 ];
-
-const CHAINS = {
-    GateLayer: {
-        chainId: 10088,
-        chainName: 'Gate Layer',
-        rpcUrl: 'https://gatelayer-mainnet.gatenode.cc',
-        blockExplorer: 'https://www.gatescan.org/gatelayer/',
-        nativeCurrency: { name: 'GT', symbol: 'GT', decimals: 18 }
-    }
-};
 
 let web3Instance = null;
 let botRunning = false;
@@ -241,75 +251,32 @@ function log(message) {
     logDiv._pendingLog.push(message);
 }
 
-async function switchNetwork(chain) {
-    try {
-        const chainConfig = CHAINS[chain];
-        await window.ethereum.request({
-            method: 'wallet_switchEthereumChain',
-            params: [{ chainId: `0x${chainConfig.chainId.toString(16)}` }]
-        });
-        log(`Switched to ${chainConfig.chainName}`);
-    } catch (switchError) {
-        if (switchError.code === 4902) {
-            const chainConfig = CHAINS[chain];
-            await window.ethereum.request({
-                method: 'wallet_addEthereumChain',
-                params: [{
-                    chainId: `0x${chainConfig.chainId.toString(16)}`,
-                    chainName: chainConfig.chainName,
-                    rpcUrls: [chainConfig.rpcUrl],
-                    nativeCurrency: chainConfig.nativeCurrency,
-                    blockExplorerUrls: [chainConfig.blockExplorer]
-                }]
-            });
-            log(`Added ${chainConfig.chainName} to MetaMask`);
-        } else {
-            throw switchError;
-        }
-    }
-}
-
 async function initializeWeb3() {
     const rpcUrls = [
         document.getElementById("rpcUrl").value.trim(),
         "https://gatelayer-rpc.gatenode.cc"
     ];
-    if (window.ethereum) {
-        web3Instance = new Web3(window.ethereum);
-        try {
-            await window.ethereum.request({ method: 'eth_requestAccounts' });
-            const accounts = await web3Instance.eth.getAccounts();
-            log(`Connected to MetaMask, account: ${accounts[0].slice(0, 6)}...${accounts[0].slice(-4)}`);
-            await switchNetwork('GateLayer');
-            const chainId = await web3Instance.eth.getChainId();
-            log(`Connected to Chain ID: ${chainId}`);
-            document.getElementById("status").textContent = `Status: Connected to Gate Layer via MetaMask\n`;
-            return web3Instance;
-        } catch (error) {
-            log(`MetaMask connection failed: ${error.message}`);
-        }
-    }
     for (const rpcUrl of rpcUrls) {
         if (!rpcUrl) {
             log(`Error: No RPC URL provided for ${rpcUrl}`);
             continue;
         }
         try {
-            const provider = new Web3.providers.HttpProvider(rpcUrl, { timeout: 20000 });
+            const provider = new Web3.providers.HttpProvider(rpcUrl, { timeout: 30000 });
             web3Instance = new Web3(provider);
             const chainId = await web3Instance.eth.getChainId();
             log(`Connected to RPC ${rpcUrl}, Chain ID: ${chainId}`);
             if (chainId !== 10088) {
                 log(`Warning: Expected Chain ID 10088, got ${chainId}. Continuing...`);
             }
-            document.getElementById("status").textContent = `Status: Connected to ${rpcUrl}\n`;
+            document.getElementById("status").textContent = `状态: 已连接到 ${rpcUrl}\n`;
             return web3Instance;
         } catch (error) {
-            log(`Failed to connect to ${rpcUrl}: ${error.message}`);
+            log(`无法连接到 ${rpcUrl}: ${error.message}`);
         }
     }
-    log("Error: All Web3 initialization attempts failed");
-    document.getElementById("status").textContent = "Status: All Web3 initialization attempts failed\n";
+    log("错误: 所有 RPC 连接失败");
+    document.getElementById("status").textContent = "状态: 所有 RPC 连接失败\n";
     return null;
 }
 
@@ -317,7 +284,7 @@ function getRandomGTAmount() {
     const min = parseFloat(document.getElementById("minAmount").value);
     const max = parseFloat(document.getElementById("maxAmount").value);
     if (isNaN(min) || isNaN(max) || min < 0 || max < min) {
-        log("Warning: Invalid amount range, using default 0.00001-0.0001 GT");
+        log("警告: 无效金额区间，使用默认 0.00001-0.0001 GT");
         return (Math.random() * (0.0001 - 0.00001) + 0.00001).toFixed(6);
     }
     return (Math.random() * (max - min) + min).toFixed(6);
@@ -331,25 +298,49 @@ async function waitForTransaction(txHash) {
         receipt = await web3Instance.eth.getTransactionReceipt(txHash);
         if (receipt) {
             if (receipt.status) return receipt;
-            throw new Error(`Transaction ${txHash} failed`);
+            throw new Error(`交易 ${txHash} 失败`);
         }
         await new Promise(resolve => setTimeout(resolve, 2000));
         attempts++;
     }
-    throw new Error(`Transaction ${txHash} not confirmed after ${maxAttempts} attempts`);
+    throw new Error(`交易 ${txHash} 未在 ${maxAttempts} 次尝试后确认`);
+}
+
+async function checkAndApproveToken(wallet, tokenAddress) {
+    const tokenContract = new web3Instance.eth.Contract(ERC20_ABI, tokenAddress);
+    const gasPrice = web3Instance.utils.toWei(document.getElementById("gasPrice").value, "gwei");
+    try {
+        const allowance = await tokenContract.methods.allowance(wallet.address, GATE_ROUTER_ADDRESS).call();
+        if (web3Instance.utils.toBN(allowance).gte(web3Instance.utils.toBN(2).pow(web3Instance.utils.toBN(256)).div(web3Instance.utils.toBN(2)))) {
+            log(`代币已授权: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}`);
+            return true;
+        }
+        log(`正在为 ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)} 授权代币...`);
+        const tx = await tokenContract.methods.approve(GATE_ROUTER_ADDRESS, web3Instance.utils.toBN(2).pow(web3Instance.utils.toBN(256)).sub(web3Instance.utils.toBN(1))).send({
+            from: wallet.address,
+            gas: 100000,
+            gasPrice
+        });
+        await waitForTransaction(tx.transactionHash);
+        log(`代币授权成功: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}`);
+        return true;
+    } catch (error) {
+        log(`代币授权失败: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}: ${error.message}`);
+        return false;
+    }
 }
 
 async function checkBalances() {
     const status = document.getElementById("status");
-    status.textContent = "Status: Checking balances...\n";
+    status.textContent = "状态: 正在检查余额...\n";
     if (!web3Instance) {
-        log("Error: Web3 not initialized");
-        status.textContent += "Error: Web3 not initialized\n";
+        log("错误: Web3 未初始化");
+        status.textContent += "错误: Web3 未初始化\n";
         return;
     }
     if (wallets.length === 0) {
-        log("Error: No wallets provided");
-        status.textContent += "Error: No wallets provided\n";
+        log("错误: 未提供钱包");
+        status.textContent += "错误: 未提供钱包\n";
         return;
     }
     const wallet = wallets[currentWalletIndex];
@@ -357,14 +348,14 @@ async function checkBalances() {
         const gtBalance = await web3Instance.eth.getBalance(wallet.address);
         const tokenContract = new web3Instance.eth.Contract(ERC20_ABI, selectedToken);
         const tokenBalance = await tokenContract.methods.balanceOf(wallet.address).call();
-        document.getElementById("gtBalance").textContent = `Balance: ${web3Instance.utils.fromWei(gtBalance, "ether")} GT`;
-        document.getElementById("tokenBalance").textContent = `Balance: ${web3Instance.utils.fromWei(tokenBalance, "ether")} ${tokenSymbol}`;
-        status.textContent += `Wallet ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)} (Index ${currentWalletIndex + 1}/${wallets.length}):\n`;
-        status.textContent += `GT Balance: ${web3Instance.utils.fromWei(gtBalance, "ether")} GT\n`;
-        status.textContent += `${tokenSymbol} Balance: ${web3Instance.utils.fromWei(tokenBalance, "ether")} ${tokenSymbol}\n`;
+        document.getElementById("gtBalance").textContent = `余额: ${web3Instance.utils.fromWei(gtBalance, "ether")} GT`;
+        document.getElementById("tokenBalance").textContent = `余额: ${web3Instance.utils.fromWei(tokenBalance, "ether")} ${tokenSymbol}`;
+        status.textContent += `钱包 ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)} (索引 ${currentWalletIndex + 1}/${wallets.length}):\n`;
+        status.textContent += `GT 余额: ${web3Instance.utils.fromWei(gtBalance, "ether")} GT\n`;
+        status.textContent += `${tokenSymbol} 余额: ${web3Instance.utils.fromWei(tokenBalance, "ether")} ${tokenSymbol}\n`;
     } catch (error) {
-        log(`Balance check failed: ${error.message}`);
-        status.textContent += `Error: Balance check failed - ${error.message}\n`;
+        log(`余额检查失败: ${error.message}`);
+        status.textContent += `错误: 余额检查失败 - ${error.message}\n`;
     }
 }
 
@@ -381,8 +372,8 @@ async function purchaseWoofSwap(wallet, GTAmount) {
         const balance = await web3Instance.eth.getBalance(wallet.address);
         const balanceGT = web3Instance.utils.fromWei(balance, "ether");
         if (parseFloat(balanceGT) < parseFloat(GTAmount) + 0.01) {
-            log(`WoofSwap: Low balance for ${wallet.address.slice(0, 6)}...: ${balanceGT} GT`);
-            document.getElementById("status").textContent += `WoofSwap: Low balance: ${balanceGT} GT\n`;
+            log(`WoofSwap: 余额不足 ${wallet.address.slice(0, 6)}...: ${balanceGT} GT`);
+            document.getElementById("status").textContent += `WoofSwap: 余额不足: ${balanceGT} GT\n`;
             return false;
         }
         let attempts = 0;
@@ -399,26 +390,26 @@ async function purchaseWoofSwap(wallet, GTAmount) {
                 });
                 await waitForTransaction(tx.transactionHash);
                 const txLink = `https://www.gatescan.org/gatelayer/tx/${tx.transactionHash}`;
-                log(`WoofSwap Buy successful: ${tx.transactionHash}`);
-                document.getElementById("status").textContent += `WoofSwap Buy: ${GTAmount} GT -> ${tokenSymbol}, TX: ${txLink}\n`;
+                log(`WoofSwap 购买成功: ${tx.transactionHash}`);
+                document.getElementById("status").textContent += `WoofSwap 购买: ${GTAmount} GT -> ${tokenSymbol}, TX: ${txLink}\n`;
                 return true;
             } catch (error) {
                 attempts++;
-                log(`WoofSwap Buy failed (attempt ${attempts}/${maxAttempts}): ${error.message}`);
+                log(`WoofSwap 购买失败 (尝试 ${attempts}/${maxAttempts}): ${error.message}`);
                 if (error.message.includes("replacement transaction underpriced") || error.message.includes("nonce too low")) {
                     nonce = await web3Instance.eth.getTransactionCount(wallet.address, "pending");
                 }
                 if (attempts === maxAttempts) {
-                    log(`WoofSwap Buy failed for ${wallet.address.slice(0, 6)}...: ${error.message}`);
-                    document.getElementById("status").textContent += `WoofSwap Buy failed: ${error.message}\n`;
+                    log(`WoofSwap 购买失败: ${wallet.address.slice(0, 6)}...: ${error.message}`);
+                    document.getElementById("status").textContent += `WoofSwap 购买失败: ${error.message}\n`;
                     return false;
                 }
                 await new Promise(resolve => setTimeout(resolve, 2000));
             }
         }
     } catch (error) {
-        log(`WoofSwap error: ${error.message}`);
-        document.getElementById("status").textContent += `WoofSwap error: ${error.message}\n`;
+        log(`WoofSwap 错误: ${error.message}`);
+        document.getElementById("status").textContent += `WoofSwap 错误: ${error.message}\n`;
         return false;
     }
 }
@@ -427,6 +418,12 @@ async function purchaseGateSwap(wallet, GTAmount) {
     if (!document.getElementById("useGateSwap").checked) return true;
     try {
         web3Instance.eth.accounts.wallet.add(wallet.privateKey);
+        const approved = await checkAndApproveToken(wallet, selectedToken);
+        if (!approved) {
+            log(`GateSwap: 代币授权失败: ${wallet.address.slice(0, 6)}...`);
+            document.getElementById("status").textContent += `GateSwap: 代币授权失败\n`;
+            return false;
+        }
         const routerContract = new web3Instance.eth.Contract(GATE_ROUTER_ABI, GATE_ROUTER_ADDRESS);
         const gasPrice = web3Instance.utils.toWei(document.getElementById("gasPrice").value, "gwei");
         const gasLimit = 10000000;
@@ -436,8 +433,8 @@ async function purchaseGateSwap(wallet, GTAmount) {
         const balance = await web3Instance.eth.getBalance(wallet.address);
         const balanceGT = web3Instance.utils.fromWei(balance, "ether");
         if (parseFloat(balanceGT) < parseFloat(GTAmount) + 0.01) {
-            log(`GateSwap: Low balance for ${wallet.address.slice(0, 6)}...: ${balanceGT} GT`);
-            document.getElementById("status").textContent += `GateSwap: Low balance: ${balanceGT} GT\n`;
+            log(`GateSwap: 余额不足 ${wallet.address.slice(0, 6)}...: ${balanceGT} GT`);
+            document.getElementById("status").textContent += `GateSwap: 余额不足: ${balanceGT} GT\n`;
             return false;
         }
         let attempts = 0;
@@ -459,92 +456,91 @@ async function purchaseGateSwap(wallet, GTAmount) {
                 });
                 await waitForTransaction(tx.transactionHash);
                 const txLink = `https://www.gatescan.org/gatelayer/tx/${tx.transactionHash}`;
-                log(`GateSwap Buy successful: ${tx.transactionHash}`);
-                document.getElementById("status").textContent += `GateSwap Buy: ${GTAmount} GT -> ~${parseFloat(tokenAmount).toFixed(6)} ${tokenSymbol}, TX: ${txLink}\n`;
+                log(`GateSwap 购买成功: ${tx.transactionHash}`);
+                document.getElementById("status").textContent += `GateSwap 购买: ${GTAmount} GT -> ~${parseFloat(tokenAmount).toFixed(6)} ${tokenSymbol}, TX: ${txLink}\n`;
                 return true;
             } catch (error) {
                 attempts++;
-                log(`GateSwap Buy failed (attempt ${attempts}/${maxAttempts}): ${error.message}`);
+                log(`GateSwap 购买失败 (尝试 ${attempts}/${maxAttempts}): ${error.message}`);
                 if (error.message.includes("replacement transaction underpriced") || error.message.includes("nonce too low")) {
                     nonce = await web3Instance.eth.getTransactionCount(wallet.address, "pending");
                 }
                 if (attempts === maxAttempts) {
-                    log(`GateSwap Buy failed for ${wallet.address.slice(0, 6)}...: ${error.message}`);
-                    document.getElementById("status").textContent += `GateSwap Buy failed: ${error.message}\n`;
+                    log(`GateSwap 购买失败: ${wallet.address.slice(0, 6)}...: ${error.message}`);
+                    document.getElementById("status").textContent += `GateSwap 购买失败: ${error.message}\n`;
                     return false;
                 }
                 await new Promise(resolve => setTimeout(resolve, 2000));
             }
         }
     } catch (error) {
-        log(`GateSwap error: ${error.message}`);
-        document.getElementById("status").textContent += `GateSwap error: ${error.message}\n`;
+        log(`GateSwap 错误: ${error.message}`);
+        document.getElementById("status").textContent += `GateSwap 错误: ${error.message}\n`;
         return false;
     }
 }
 
-async function initBot() {
+async function startBot() {
     if (botRunning) {
-        log("Bot already running");
-        document.getElementById("status").textContent = "Status: Bot already running\n";
+        log("错误: 机器人已在运行");
+        document.getElementById("status").textContent = "状态: 机器人已在运行\n";
         return;
     }
     const privateKeysInput = document.getElementById("privateKeys").value.trim();
     if (!privateKeysInput) {
-        log("Error: No private keys provided");
-        document.getElementById("status").textContent = "Status: No private keys provided\n";
+        log("错误: 未提供私钥");
+        document.getElementById("status").textContent = "状态: 未提供私钥\n";
         return;
     }
     if (!document.getElementById("useWoofSwap").checked && !document.getElementById("useGateSwap").checked) {
-        log("Error: At least one DEX must be selected");
-        document.getElementById("status").textContent = "Status: At least one DEX must be selected\n";
+        log("错误: 必须选择至少一个 DEX");
+        document.getElementById("status").textContent = "状态: 必须选择至少一个 DEX\n";
         return;
     }
     const minAmount = parseFloat(document.getElementById("minAmount").value);
     const maxAmount = parseFloat(document.getElementById("maxAmount").value);
     if (isNaN(minAmount) || isNaN(maxAmount) || minAmount < 0 || maxAmount < minAmount) {
-        log("Error: Invalid amount range (min must be >= 0 and <= max)");
-        document.getElementById("status").textContent = "Status: Invalid amount range\n";
+        log("错误: 无效金额区间 (最小值必须 >= 0 且 <= 最大值)");
+        document.getElementById("status").textContent = "状态: 无效金额区间\n";
         return;
     }
     const tokenSelect = document.getElementById("tokenSelect").value;
     if (tokenSelect === "custom") {
         const customToken = document.getElementById("customToken").value.trim();
         if (!customToken || !Web3.utils.isAddress(customToken)) {
-            log("Error: Invalid custom token address");
-            document.getElementById("status").textContent = "Status: Invalid custom token address\n";
+            log("错误: 无效的自定义代币地址");
+            document.getElementById("status").textContent = "状态: 无效的自定义代币地址\n";
             return;
         }
         selectedToken = customToken;
-        tokenSymbol = "Custom Token";
+        tokenSymbol = "自定义代币";
     } else {
         selectedToken = tokenSelect;
-        tokenSymbol = Object.keys(TOKEN_ADDRESSES).find(key => TOKEN_ADDRESSES[key].toLowerCase() === selectedToken.toLowerCase()) || "Unknown";
+        tokenSymbol = Object.keys(TOKEN_ADDRESSES).find(key => TOKEN_ADDRESSES[key].toLowerCase() === selectedToken.toLowerCase()) || "未知";
     }
     const keys = privateKeysInput.split('\n').map(key => key.trim()).filter(key => key);
-    log(`Processing ${keys.length} private keys: ${keys.map(k => k.slice(0, 10) + '...').join(', ')}`);
+    log(`处理 ${keys.length} 个私钥: ${keys.map(k => k.slice(0, 10) + '...').join(', ')}`);
     wallets = keys.map((key, index) => {
         if (!key.startsWith('0x') || key.length !== 66 || !/^[0-9a-fA-F]{64}$/.test(key.slice(2))) {
-            log(`Invalid private key at line ${index + 1}: ${key.slice(0, 10)}... (must start with 0x, 66 chars, hex only)`);
+            log(`无效私钥（第 ${index + 1} 行）: ${key.slice(0, 10)}... (需以 0x 开头，66 位，仅限十六进制字符)`);
             return null;
         }
         try {
             const address = Web3.utils.privateToAddress(key);
-            const wallet = { address, privateKey: key };
-            log(`Valid private key at line ${index + 1}: Address ${address.slice(0, 6)}...${address.slice(-4)}`);
-            return wallet;
+            log(`有效私钥（第 ${index + 1} 行）: 地址 ${address.slice(0, 6)}...${address.slice(-4)}`);
+            return { address, privateKey: key };
         } catch (error) {
-            log(`Invalid private key at line ${index + 1}: ${error.message}`);
+            log(`无效私钥（第 ${index + 1} 行）: ${error.message}`);
             return null;
         }
     }).filter(wallet => wallet);
     if (wallets.length === 0) {
-        log("Error: No valid private keys provided");
-        document.getElementById("status").textContent = "Status: No valid private keys provided\n";
+        log("错误: 未提供有效私钥");
+        document.getElementById("status").textContent = "状态: 未提供有效私钥\n";
         return;
     }
-    log(`Loaded ${wallets.length} valid wallets`);
-    document.getElementById("status").textContent = `Status: Loaded ${wallets.length} wallets\n`;
+    log(`加载 ${wallets.length} 个有效钱包`);
+    document.getElementById("status").textContent = `状态: 加载 ${wallets.length} 个有效钱包\n`;
     web3Instance = await initializeWeb3();
     if (!web3Instance) return;
     botRunning = true;
@@ -553,14 +549,14 @@ async function initBot() {
         if (!botRunning || !web3Instance) return;
         const wallet = wallets[currentWalletIndex];
         const GTAmount = getRandomGTAmount();
-        log(`Using wallet ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)} (Index ${currentWalletIndex + 1}/${wallets.length}) for buying ${GTAmount} GT of ${tokenSymbol}`);
+        log(`使用钱包 ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)} (索引 ${currentWalletIndex + 1}/${wallets.length}) 购买 ${GTAmount} GT 的 ${tokenSymbol}`);
         await purchaseWoofSwap(wallet, GTAmount);
         await purchaseGateSwap(wallet, GTAmount);
         await checkBalances();
         currentWalletIndex = (currentWalletIndex + 1) % wallets.length;
     }, 10000);
-    log(`Auto buy started: ${tokenSymbol} every 10 seconds with ${minAmount}-${maxAmount} GT`);
-    document.getElementById("status").textContent += `Auto buy started for ${tokenSymbol}\n`;
+    log(`自动购买启动: 每 10 秒购买 ${tokenSymbol}，金额区间 ${minAmount}-${maxAmount} GT`);
+    document.getElementById("status").textContent += `状态: 自动购买 ${tokenSymbol} 启动\n`;
 }
 
 function stopBot() {
@@ -569,12 +565,12 @@ function stopBot() {
         autoBuyInterval = null;
     }
     botRunning = false;
-    log("Bot stopped");
-    document.getElementById("status").textContent = "Status: Bot stopped\n";
+    log("机器人已停止");
+    document.getElementById("status").textContent = "状态: 机器人已停止\n";
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-    log("Page loaded, ready to start bot");
+    log("页面加载完成，准备启动机器人");
     document.getElementById("tokenSelect").addEventListener("change", () => {
         const customTokenDiv = document.getElementById("customToken").parentElement;
         customTokenDiv.style.display = document.getElementById("tokenSelect").value === "custom" ? "block" : "none";
